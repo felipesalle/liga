@@ -147,17 +147,56 @@
             return (a?.name || '').localeCompare(b?.name || '');
         };
 
+        // --- Helper para calcular rango semanal (Lunes a Domingo) ---
+        const getWeekRange = (dateStr) => {
+            if (!dateStr) return null;
+            const parts = dateStr.split('-').map(Number);
+            if (parts.length !== 3) return null;
+            const [year, month, day] = parts;
+            const d = new Date(Date.UTC(year, month - 1, day));
+            const dayOfWeek = d.getUTCDay();
+            const distanceToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+            const mon = new Date(d);
+            mon.setUTCDate(d.getUTCDate() + distanceToMon);
+            const sun = new Date(mon);
+            sun.setUTCDate(mon.getUTCDate() + 6);
+
+            const formatISO = (dateObj) => dateObj.toISOString().split('T')[0];
+            return {
+                start: formatISO(mon),
+                end: formatISO(sun)
+            };
+        };
+
+        const formatWeekLabel = (startDateStr, endDateStr) => {
+            if (!startDateStr || !endDateStr) return '';
+            const [y1, m1, d1] = startDateStr.split('-').map(Number);
+            const [y2, m2, d2] = endDateStr.split('-').map(Number);
+            const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+            if (m1 === m2) {
+                return `Semana del ${d1} al ${d2} de ${months[m1 - 1]}`;
+            } else {
+                return `Semana del ${d1} de ${months[m1 - 1]} al ${d2} de ${months[m2 - 1]}`;
+            }
+        };
+
         // --- Facebook & Redes Sociales Helper Functions ---
         const getFacebookSummaryData = (visMatches, visLeagues, visTeams, visPlayers, selectedDate) => {
             const sortedLeagues = [...(visLeagues || [])].sort(sortLeaguesGlobal);
             
             const allPlayedMatches = (visMatches || []).filter(m => m.scoreHome !== null && m.scoreHome !== undefined);
             const playedDates = [...new Set(allPlayedMatches.map(m => m.date))].filter(Boolean).sort();
-            const targetDate = selectedDate || (playedDates.length > 0 ? playedDates[playedDates.length - 1] : null);
+            
+            const anchorDate = selectedDate || (playedDates.length > 0 ? playedDates[playedDates.length - 1] : null);
+            const weekRange = anchorDate ? getWeekRange(anchorDate) : null;
 
-            const playedMatches = targetDate 
-                ? allPlayedMatches.filter(m => m.date === targetDate)
+            const playedMatches = weekRange
+                ? allPlayedMatches.filter(m => m.date >= weekRange.start && m.date <= weekRange.end)
                 : allPlayedMatches;
+
+            const targetDateLabel = weekRange
+                ? formatWeekLabel(weekRange.start, weekRange.end)
+                : (anchorDate || null);
 
             const leagueResultsMap = [];
             sortedLeagues.forEach(league => {
@@ -200,15 +239,17 @@
                 topScorers = sortedScorers.filter(s => s.goals === maxGoals || s.goals >= Math.max(1, maxGoals - 1));
             }
 
+            // Próxima semana pendiente
             const pendingMatches = (visMatches || []).filter(m => m.scoreHome === null || m.scoreHome === undefined);
             const pendingDates = [...new Set(pendingMatches.map(m => m.date))].filter(Boolean).sort();
             const nextPendingDate = pendingDates.length > 0 ? pendingDates[0] : null;
+            const nextWeekRange = nextPendingDate ? getWeekRange(nextPendingDate) : null;
             
-            const upcomingMatches = nextPendingDate 
-                ? pendingMatches.filter(m => m.date === nextPendingDate)
+            const upcomingMatches = nextWeekRange 
+                ? pendingMatches.filter(m => m.date >= nextWeekRange.start && m.date <= nextWeekRange.end)
                 : pendingMatches;
 
-            return { targetDate, leagueResultsMap, topScorers, upcomingMatches };
+            return { targetDate: targetDateLabel, leagueResultsMap, topScorers, upcomingMatches };
         };
 
         const copyFacebookSummaryText = (visMatches, visLeagues, visTeams, visPlayers, selectedDate, levelName = 'PREPARATORIA', currentSport = 'Fútbol', getTeamNameFn = null, showMessageFn = null) => {
