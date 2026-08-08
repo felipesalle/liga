@@ -98,6 +98,335 @@
             return code ? `https://flagcdn.com/w80/${code}.png` : 'https://placehold.co/80x50/A0A0A0/FFF?text=N/A';
         };
 
+        // --- Telegram Notification Function ---
+        const TELEGRAM_BOT_TOKEN = '8314025136:AAG3P1AoU1rExMIeTEsE_1YDxc-Vj3r9Tac';
+        const TELEGRAM_CHAT_ID = '6740086';
+        const APP_LEVEL_NAME = '🎓 PREPARATORIA';
+
+        const sendTelegramNotification = async (message, userEmail) => {
+            if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+                console.warn("Telegram bot token or chat ID not configured.");
+                return;
+            }
+            try {
+                const cleanEmail = userEmail || 'Usuario Administrador';
+                const cleanMsg = typeof message === 'string' ? message.replace(/\*/g, '') : message;
+                const fullMessage = `📌 [TORNEOS ${APP_LEVEL_NAME}]\n🔔 ACCIÓN EN LA APP:\n${cleanMsg}\n\n👤 Realizada por: ${cleanEmail}`;
+                const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        chat_id: TELEGRAM_CHAT_ID,
+                        text: fullMessage,
+                    }),
+                });
+
+                const data = await response.json();
+                if (data.ok) {
+                    console.log("Notificación de Telegram enviada con éxito.");
+                } else {
+                    console.error("Telegram API error:", data.description);
+                }
+            } catch (error) {
+                console.error("Error de red enviando notificación a Telegram:", error);
+            }
+        };
+
+        // --- Global Helper for League Sorting ---
+        const sortLeaguesGlobal = (a, b) => {
+            const order = ['1ro A', '1ro B', '2do A', '2do B', '3ro A', '3ro B', '4to A', '4to B', 'QB', 'FM', 'CSH', 'EA', 'SCH', '1ro Varonil', '1ro Femenil', '3ro Varonil', '3ro Femenil', 'Areas Varonil', 'Areas Femenil'];
+            const indexA = order.indexOf(a?.name);
+            const indexB = order.indexOf(b?.name);
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+            if (indexA !== -1) return -1;
+            if (indexB !== -1) return 1;
+            return (a?.name || '').localeCompare(b?.name || '');
+        };
+
+        // --- Facebook & Redes Sociales Helper Functions ---
+        const getFacebookSummaryData = (visMatches, visLeagues, visTeams, visPlayers, selectedDate) => {
+            const sortedLeagues = [...(visLeagues || [])].sort(sortLeaguesGlobal);
+            
+            const allPlayedMatches = (visMatches || []).filter(m => m.scoreHome !== null && m.scoreHome !== undefined);
+            const playedDates = [...new Set(allPlayedMatches.map(m => m.date))].filter(Boolean).sort();
+            const targetDate = selectedDate || (playedDates.length > 0 ? playedDates[playedDates.length - 1] : null);
+
+            const playedMatches = targetDate 
+                ? allPlayedMatches.filter(m => m.date === targetDate)
+                : allPlayedMatches;
+
+            const leagueResultsMap = [];
+            sortedLeagues.forEach(league => {
+                const lMatches = playedMatches.filter(m => m.leagueId === league.id);
+                if (lMatches.length > 0) {
+                    leagueResultsMap.push({
+                        league,
+                        matches: lMatches
+                    });
+                }
+            });
+
+            const playerGoalsMap = {};
+            playedMatches.forEach(m => {
+                if (m.scorers && Array.isArray(m.scorers)) {
+                    m.scorers.forEach(s => {
+                        if (s.playerId && s.count > 0) {
+                            playerGoalsMap[s.playerId] = (playerGoalsMap[s.playerId] || 0) + s.count;
+                        }
+                    });
+                }
+            });
+
+            const sortedScorers = Object.keys(playerGoalsMap)
+                .map(pId => {
+                    const pObj = (visPlayers || []).find(p => p.id === pId);
+                    const tObj = (visTeams || []).find(t => t.id === pObj?.teamId);
+                    return {
+                        id: pId,
+                        name: pObj?.name || 'Alumno',
+                        teamName: tObj?.name || 'Equipo',
+                        goals: playerGoalsMap[pId]
+                    };
+                })
+                .sort((a, b) => b.goals - a.goals);
+
+            let topScorers = [];
+            if (sortedScorers.length > 0) {
+                const maxGoals = sortedScorers[0].goals;
+                topScorers = sortedScorers.filter(s => s.goals === maxGoals || s.goals >= Math.max(1, maxGoals - 1));
+            }
+
+            const pendingMatches = (visMatches || []).filter(m => m.scoreHome === null || m.scoreHome === undefined);
+            const pendingDates = [...new Set(pendingMatches.map(m => m.date))].filter(Boolean).sort();
+            const nextPendingDate = pendingDates.length > 0 ? pendingDates[0] : null;
+            
+            const upcomingMatches = nextPendingDate 
+                ? pendingMatches.filter(m => m.date === nextPendingDate)
+                : pendingMatches;
+
+            return { targetDate, leagueResultsMap, topScorers, upcomingMatches };
+        };
+
+        const copyFacebookSummaryText = (visMatches, visLeagues, visTeams, visPlayers, selectedDate, levelName = 'PREPARATORIA', currentSport = 'Fútbol', getTeamNameFn = null, showMessageFn = null) => {
+            const { targetDate, leagueResultsMap, topScorers, upcomingMatches } = getFacebookSummaryData(visMatches, visLeagues, visTeams, visPlayers, selectedDate);
+            const sportTitle = (currentSport || 'FÚTBOL').toUpperCase();
+            const scoringInfo = getSportScoringInfo(currentSport);
+            const unitLabel = (scoringInfo.unit || 'puntos').toLowerCase();
+            const sportEmoji = scoringInfo.emoji || '🏆';
+
+            const getTeam = (teamId) => {
+                if (getTeamNameFn) return getTeamNameFn(teamId);
+                return (visTeams || []).find(t => t.id === teamId)?.name || 'Equipo';
+            };
+
+            let text = `🏆 LIGAS LA SALLE TUXTLA — ${levelName.toUpperCase()} 🏆\n` +
+                       `📌 RESUMEN DE LA JORNADA (${sportEmoji} ${sportTitle}${targetDate ? ` — ${targetDate}` : ''})\n\n` +
+                       `${sportEmoji} RESULTADOS DE LA SEMANA:\n`;
+
+            if (leagueResultsMap.length === 0) {
+                text += `(No hay resultados registrados en esta jornada aún)\n`;
+            } else {
+                leagueResultsMap.forEach(({ league, matches }) => {
+                    text += `\n🔹 ${league.name}:\n`;
+                    matches.forEach(m => {
+                        const home = getTeam(m.homeTeamId);
+                        const away = getTeam(m.awayTeamId);
+                        const status = m.status === 'Anulado' ? '(Anulado 0-0)' : '';
+                        text += `  • ${home} ${m.scoreHome} - ${m.scoreAway} ${away} ${status}\n`;
+                    });
+                });
+            }
+
+            text += `\n🥇 ${scoringInfo.scorerTitle ? scoringInfo.scorerTitle.toUpperCase() : 'ANOTADORES'} DE LA JORNADA:\n`;
+            if (topScorers.length === 0) {
+                text += `  Sin anotadores registrados.\n`;
+            } else {
+                topScorers.forEach(s => {
+                    text += `  ⭐ ${s.name} (${s.teamName}) — ${s.goals} ${unitLabel}\n`;
+                });
+            }
+
+            text += `\n📅 PRÓXIMA JORNADA:\n`;
+            if (upcomingMatches.length === 0) {
+                text += `  Sin partidos agendados.\n`;
+            } else {
+                upcomingMatches.forEach(m => {
+                    const home = getTeam(m.homeTeamId);
+                    const away = getTeam(m.awayTeamId);
+                    text += `  🗓️ ${m.date || 'Por definir'}: ${home} vs ${away}\n`;
+                });
+            }
+
+            const tagLevel = levelName.toLowerCase().includes('prepa') ? '#Preparatoria' : '#Primaria';
+            text += `\n#LigasLaSalle ${tagLevel} #OrgulloLaSalle #Tuxtla`;
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text);
+                if (showMessageFn) showMessageFn("📋 Texto para Facebook copiado al portapapeles con éxito.");
+                else alert("📋 Texto para Facebook copiado al portapapeles con éxito.");
+            } else {
+                prompt("Copia este texto para publicar en Facebook:", text);
+            }
+        };
+
+        const printFacebookSummaryWindow = (visMatches, visLeagues, visTeams, visPlayers, selectedDate, levelName = 'Preparatoria Tuxtla', currentSport = 'Fútbol') => {
+            const { targetDate, leagueResultsMap, topScorers, upcomingMatches } = getFacebookSummaryData(visMatches, visLeagues, visTeams, visPlayers, selectedDate);
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                alert("Por favor permite las ventanas emergentes.");
+                return;
+            }
+
+            const sportTitle = (currentSport || 'FÚTBOL').toUpperCase();
+            const scoringInfo = getSportScoringInfo(currentSport);
+            const unitLabel = (scoringInfo.unit || 'puntos').toLowerCase();
+            const sportEmoji = scoringInfo.emoji || '🏆';
+
+            let bgGradient = 'linear-gradient(135deg, #101097 0%, #001E61 100%)';
+            if (currentSport === 'Básquetbol') bgGradient = 'linear-gradient(135deg, #c2410c 0%, #7c2d12 100%)';
+            else if (currentSport === 'Tocho') bgGradient = 'linear-gradient(135deg, #be123c 0%, #881337 100%)';
+            else if (currentSport === 'Voleibol') bgGradient = 'linear-gradient(135deg, #0d9488 0%, #115e59 100%)';
+
+            let htmlContent = `
+                <!DOCTYPE html>
+                <html lang="es">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Resumen de la Jornada — Facebook</title>
+                    <style>
+                        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap');
+                        * { box-sizing: border-box; margin: 0; padding: 0; }
+                        body { font-family: 'Outfit', sans-serif; background: #0f172a; color: #fff; padding: 30px; display: flex; flex-direction: column; align-items: center; }
+                        .actions-bar { width: 100%; max-width: 760px; margin-bottom: 20px; display: flex; justify-content: space-between; gap: 10px; }
+                        .btn-action { padding: 12px 24px; border-radius: 12px; font-weight: 700; font-size: 14px; cursor: pointer; border: none; font-family: 'Outfit', sans-serif; transition: all 0.2s; }
+                        .btn-print { background: #101097; color: white; }
+                        .btn-copy { background: #CE0E2D; color: white; }
+                        .poster-card { width: 100%; max-width: 760px; background: ${bgGradient}; border-radius: 28px; padding: 30px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); border: 4px solid #CE0E2D; position: relative; overflow: hidden; }
+                        .poster-header { text-align: center; border-bottom: 2px solid rgba(255, 255, 255, 0.15); padding-bottom: 18px; margin-bottom: 22px; }
+                        .header-logo-row { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 6px; }
+                        .school-logo { width: 54px; height: 54px; object-fit: contain; background: #fff; border-radius: 50%; padding: 2px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+                        .brand-title { font-size: 32px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase; color: #fff; line-height: 1; }
+                        .brand-title span { color: #60a5fa; }
+                        .section-badge { display: inline-block; background: #CE0E2D; color: white; font-weight: 800; font-size: 12px; padding: 4px 14px; border-radius: 20px; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+                        .sport-label { font-size: 15px; color: #93c5fd; font-weight: 800; text-transform: uppercase; margin-top: 10px; }
+                        .section-title { font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #fbbf24; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(251, 191, 36, 0.3); padding-bottom: 6px; }
+                        .results-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 22px; }
+                        @media (max-width: 600px) { .results-grid { grid-template-columns: 1fr; } }
+                        .group-block { background: rgba(255, 255, 255, 0.08); border-radius: 18px; padding: 12px; border: 1px solid rgba(255, 255, 255, 0.12); }
+                        .group-name { font-size: 13px; font-weight: 800; color: #93c5fd; margin-bottom: 10px; text-transform: uppercase; text-align: center; letter-spacing: 0.5px; }
+                        .match-row { display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.3); padding: 6px 10px; border-radius: 12px; margin-bottom: 6px; font-size: 12px; gap: 4px; }
+                        .team-wrap { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+                        .match-team { font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; flex: 1; min-width: 0; font-size: 11px; }
+                        .team-logo-icon { width: 24px; height: 24px; object-fit: contain; border-radius: 50%; background: #fff; padding: 1.5px; border: 1px solid rgba(255, 255, 255, 0.4); flex-shrink: 0; }
+                        .match-score { font-weight: 900; color: #fbbf24; font-size: 13px; background: rgba(255, 255, 255, 0.18); padding: 3px 8px; border-radius: 6px; flex-shrink: 0; white-space: nowrap; text-align: center; margin: 0 4px; }
+                        .bottom-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
+                        @media (max-width: 600px) { .bottom-grid { grid-template-columns: 1fr; } }
+                        .bottom-block { background: rgba(255, 255, 255, 0.08); border-radius: 18px; padding: 14px; border: 1px solid rgba(255, 255, 255, 0.12); }
+                        .scorer-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: rgba(0, 0, 0, 0.25); border-radius: 10px; margin-bottom: 6px; font-size: 12px; }
+                        .scorer-name { font-weight: 800; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: 11px; }
+                        .scorer-team { color: #94a3b8; font-size: 10px; margin-left: 4px; flex-shrink: 0; }
+                        .scorer-badge { background: #fbbf24; color: #0f172a; font-weight: 900; padding: 2px 8px; border-radius: 14px; font-size: 11px; flex-shrink: 0; margin-left: 6px; }
+                        .upcoming-card { background: rgba(0, 0, 0, 0.25); padding: 8px 10px; border-radius: 10px; margin-bottom: 6px; font-size: 11px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.05); }
+                        .upcoming-teams-wrap { display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 800; color: #fff; margin-bottom: 2px; }
+                        .upcoming-date { color: #94a3b8; font-size: 10px; }
+                        .poster-footer { text-align: center; font-size: 11px; color: rgba(255, 255, 255, 0.5); border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 10px; margin-top: 10px; }
+                        @media print { body { background: #fff; padding: 0; } .actions-bar { display: none; } .poster-card { max-width: 100%; box-shadow: none; } }
+                    </style>
+                </head>
+                <body>
+                    <div class="actions-bar">
+                        <button onclick="window.print()" class="btn-action btn-print">🖨️ Imprimir / Guardar Imagen</button>
+                        <button onclick="if(window.opener && window.opener.copyFacebookSummaryText) { window.opener.copyFacebookSummaryText(window.opener.visibleMatches, window.opener.visibleLeagues, window.opener.visibleTeams, window.opener.visiblePlayers, null, '${levelName}', '${currentSport}'); } else { alert('Copiado'); }" class="btn-action btn-copy">📋 Copiar Texto para Facebook</button>
+                    </div>
+
+                    <div class="poster-card">
+                        <div class="poster-header">
+                            <div class="header-logo-row">
+                                <img src="https://i.imgur.com/pbiHVPL.png" class="school-logo" alt="La Salle Logo" />
+                                <div class="brand-title">Ligas <span>La Salle</span></div>
+                            </div>
+                            <div class="section-badge">${levelName}</div>
+                            <div class="sport-label">${sportEmoji} Resumen de la Jornada — ${sportTitle} ${targetDate ? `(${targetDate})` : ''}</div>
+                        </div>
+
+                        <div class="section-title">${sportEmoji} Resultados de la Semana</div>
+                        <div class="results-grid">
+                            ${leagueResultsMap.length === 0 ? '<div style="grid-column: 1/-1; text-align: center; color: #94a3b8; padding: 15px;">No hay resultados registrados en esta jornada.</div>' : 
+                                leagueResultsMap.map(({ league, matches }) => `
+                                    <div class="group-block">
+                                        <div class="group-name">${league.name}</div>
+                                        ${matches.map(m => {
+                                            const hTeam = (visTeams || []).find(t => t.id === m.homeTeamId);
+                                            const aTeam = (visTeams || []).find(t => t.id === m.awayTeamId);
+                                            return `
+                                                <div class="match-row">
+                                                    <div class="team-wrap">
+                                                        <img src="${hTeam?.flagUrl || 'https://placehold.co/80x50/A0A0A0/FFF?text=N/A'}" class="team-logo-icon" />
+                                                        <span class="match-team">${hTeam?.name || 'Local'}</span>
+                                                    </div>
+                                                    <div class="match-score">${m.scoreHome} - ${m.scoreAway}</div>
+                                                    <div class="team-wrap right">
+                                                        <span class="match-team right">${aTeam?.name || 'Visitante'}</span>
+                                                        <img src="${aTeam?.flagUrl || 'https://placehold.co/80x50/A0A0A0/FFF?text=N/A'}" class="team-logo-icon" />
+                                                    </div>
+                                                </div>
+                                            `;
+                                        }).join('')}
+                                    </div>
+                                `).join('')
+                            }
+                        </div>
+
+                        <div class="bottom-grid">
+                            <div class="bottom-block">
+                                <div class="section-title">🥇 ${scoringInfo.scorerTitle ? scoringInfo.scorerTitle.toUpperCase() : 'ANOTADORES'} DE LA FECHA</div>
+                                ${topScorers.length === 0 ? '<div style="color:#94a3b8; font-size:11px;">Sin anotadores registrados</div>' :
+                                    topScorers.map(s => `
+                                        <div class="scorer-item">
+                                            <span class="scorer-name">⭐ ${s.name} <span class="scorer-team">(${s.teamName})</span></span>
+                                            <span class="scorer-badge">${s.goals} ${unitLabel}</span>
+                                        </div>
+                                    `).join('')
+                                }
+                            </div>
+
+                            <div class="bottom-block">
+                                <div class="section-title">📅 PRÓXIMOS PARTIDOS</div>
+                                ${upcomingMatches.length === 0 ? '<div style="color:#94a3b8; font-size:11px;">Sin partidos agendados</div>' :
+                                    upcomingMatches.map(m => {
+                                        const hTeam = (visTeams || []).find(t => t.id === m.homeTeamId);
+                                        const aTeam = (visTeams || []).find(t => t.id === m.awayTeamId);
+                                        return `
+                                            <div class="upcoming-card">
+                                                <div class="upcoming-teams-wrap">
+                                                    <span>${hTeam?.name || 'Local'}</span> vs <span>${aTeam?.name || 'Visitante'}</span>
+                                                </div>
+                                                <div class="upcoming-date">🗓️ ${m.date || 'Por definir'}</div>
+                                            </div>
+                                        `;
+                                    }).join('')
+                                }
+                            </div>
+                        </div>
+
+                        <div class="poster-footer">
+                            Colegio La Salle Tuxtla — Coordinación de Deportes
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `;
+
+            printWindow.document.open();
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+        };
+        window.copyFacebookSummaryText = copyFacebookSummaryText;
+
         const SPORT_THEMES = {
             'Fútbol': {
                 gradient: 'from-blue-700 via-indigo-800 to-slate-900',
@@ -391,6 +720,7 @@
                     });
                     await Promise.all(promises);
                     showMessage(`${names.length} jugador(es) añadido(s) con éxito.`);
+                    sendTelegramNotification(`Jugadores añadidos al equipo ${team.name}: ${names.join(', ')}`, window.firebaseApp?.auth?.currentUser?.email);
                     onClose();
                 } catch (e) {
                     console.error("Error al añadir jugadores:", e);
@@ -431,6 +761,7 @@
                         flagUrl: newFlagUrl
                     });
                     showMessage(`País actualizado a ${selectedCountry}.`);
+                    sendTelegramNotification(`Equipo actualizado: ${selectedCountry} (anterior: ${team.name}, ID: ${team.id})`, window.firebaseApp?.auth?.currentUser?.email);
                     onClose();
                 } catch (e) {
                     console.error("Error al actualizar país del equipo:", e);
@@ -607,6 +938,29 @@
                     setIsEditing(false);
                     setSelectedMatch(null);
                     showMessage("Partido actualizado con éxito.");
+                    
+                    const homeTeamName = getTeamName(selectedMatch.homeTeamId);
+                    const awayTeamName = getTeamName(selectedMatch.awayTeamId);
+                    const leagueName = getLeagueName(selectedMatch.leagueId);
+                    const selectedLeagueObj = (leagues || []).find(l => l.id === selectedMatch.leagueId);
+                    const currentSportInfo = getSportScoringInfo(selectedLeagueObj?.sport || 'Fútbol');
+                    
+                    let scorersMessage = '';
+                    if (scorers && scorers.length > 0) {
+                        scorersMessage = '\n' + currentSportInfo.term + ':\n' + scorers.map(s => {
+                            const pObj = (players || []).find(p => p.id === s.playerId);
+                            const tName = getTeamName(s.teamId);
+                            return `• ${pObj?.name || 'Jugador'} (${tName}): ${s.count}`;
+                        }).join('\n');
+                    }
+                    
+                    const notificationMessage = `Resultado de Partido Registrado\n\n` +
+                        `Liga: ${leagueName}\n` + 
+                        `Fecha: ${selectedMatch.date}\n\n` + 
+                        `Resultado Final:\n` + 
+                        `${homeTeamName} ${scoreHome} - ${scoreAway} ${awayTeamName}${scorersMessage}`;
+                    sendTelegramNotification(notificationMessage, window.firebaseApp?.auth?.currentUser?.email);
+
                     if (onMatchSaved) {
                         onMatchSaved(updatedMatch);
                     }
@@ -646,6 +1000,15 @@
                         setIsEditing(false);
                         setSelectedMatch(null);
                         showMessage("Partido anulado con éxito (Empate 0-0).");
+
+                        const notificationMessage = `Partido Anulado\n\n` +
+                            `Liga: ${getLeagueName(selectedMatch.leagueId)}\n` +
+                            `Fecha: ${selectedMatch.date}\n\n` +
+                            `Partido:\n` +
+                            `${getTeamName(selectedMatch.homeTeamId)} vs ${getTeamName(selectedMatch.awayTeamId)}\n\n` +
+                            `El partido ha sido anulado y registrado como un empate 0-0.`;
+                        sendTelegramNotification(notificationMessage, window.firebaseApp?.auth?.currentUser?.email);
+
                         if (onMatchSaved) {
                             onMatchSaved(nulledMatch);
                         }
@@ -934,6 +1297,7 @@
                 try {
                     await signInWithEmailAndPassword(auth, email, password);
                     showMessage("Inicio de sesión exitoso.");
+                    sendTelegramNotification("Ha iniciado sesión en el modo administrador.", email);
                 } catch (error) {
                     showMessage("Error al iniciar sesión: " + error.message);
                 }
@@ -955,6 +1319,10 @@
                 const { doc, updateDoc } = window.firebaseModules;
                 try {
                     await updateDoc(doc(window.firebaseApp.db, `artifacts/${appId}/public/data/leagues`, leagueId), { matchDay: day ? parseInt(day, 10) : null });
+                    const leagueObj = (leagues || []).find(l => l.id === leagueId);
+                    const dayLabels = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado', 0: 'Domingo' };
+                    const dayLabel = day !== undefined && day !== null && day !== '' ? (dayLabels[parseInt(day, 10)] || day) : 'Sin día fijo';
+                    sendTelegramNotification(`Día de partido actualizado para liga ${leagueObj?.name || leagueId} a ${dayLabel}`, user?.email);
                 } catch (e) { console.error("Error updating match day:", e); showMessage("Error al actualizar el día."); }
             };
 
@@ -1118,6 +1486,7 @@
                             }
                         }
                         showMessage(`Torneo "${tournamentName}" creado con éxito (${semLabel}).`);
+                        sendTelegramNotification(`Nuevo torneo creado: ${tournamentName} (${selectedSport}, ${semLabel})`, user?.email);
                     }
                 } catch (e) { console.error("Error creating tournament:", e); showMessage("Error al crear el torneo."); }
                 setIsLoading(false);
@@ -1719,6 +2088,11 @@
             const visiblePlayers = players.filter(p => visibleTeamIds.includes(p.teamId));
             const visibleMatches = matches.filter(m => visibleLeagueIds.includes(m.leagueId));
 
+            window.visibleMatches = visibleMatches;
+            window.visibleLeagues = visibleLeagues;
+            window.visibleTeams = visibleTeams;
+            window.visiblePlayers = visiblePlayers;
+
             const AdminPanel = () => {
                 const [adminSubTab, setAdminSubTab] = useState('tournaments');
                 const activeTournament = tournaments.find(t => t.id === selectedTournamentId);
@@ -1899,6 +2273,33 @@
                                         <button onClick={() => generateUpcomingMatchesPdf(visibleMatches)} className="btn-primary">PDF Próximos Partidos</button>
                                         <button onClick={() => generateStandingsAndTopScorersPdf(visibleLeagues, visibleTeams, visibleMatches, visiblePlayers)} className="btn-primary">PDF Clasificación y Goleo</button>
                                         <button onClick={() => generateTeamsAndPlayersPdf(visibleLeagues, visibleTeams, visiblePlayers)} className="btn-primary">PDF Plantillas de Equipos</button>
+                                    </div>
+                                </div>
+
+                                {/* Seccion Resumen de la Jornada para Redes Sociales */}
+                                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg space-y-4 border-t-4 border-[#101097]">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center">
+                                            📱 Resumen de la Jornada para Redes Sociales (Facebook / Instagram)
+                                        </h3>
+                                    </div>
+                                    <p className="text-gray-600 dark:text-gray-300">Genera un póster gráfico HD o copia el resumen estructurado listo para publicar en redes.</p>
+                                    <div className="flex flex-wrap gap-4">
+                                        {/* Boton 1: Generar Poster Visual */}
+                                        <button 
+                                            onClick={() => printFacebookSummaryWindow(visibleMatches, visibleLeagues, visibleTeams, visiblePlayers, selectedDateFilter, 'Preparatoria Tuxtla', activeTournament?.sport || 'Fútbol')} 
+                                            className="btn-primary flex-1 min-w-[220px] flex items-center justify-center bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all"
+                                        >
+                                            🖼️ Generar Póster Visual (Imprimir / Exportar)
+                                        </button>
+
+                                        {/* Boton 2: Copiar Texto Formateado */}
+                                        <button 
+                                            onClick={() => copyFacebookSummaryText(visibleMatches, visibleLeagues, visibleTeams, visiblePlayers, selectedDateFilter, 'PREPARATORIA', activeTournament?.sport || 'Fútbol', getTeamName, showMessage)} 
+                                            className="btn-secondary flex-1 min-w-[220px] flex items-center justify-center bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all"
+                                        >
+                                            📋 Copiar Texto Formateado para Facebook
+                                        </button>
                                     </div>
                                 </div>
                             </div>
